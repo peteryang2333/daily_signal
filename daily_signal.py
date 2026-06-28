@@ -1,1 +1,36 @@
+name: Daily Quant Signal
 
+on:
+  schedule:
+    # 每天在美股收盘前15分钟运行 (此时间为 UTC 时间)
+    # 美东夏令时 15:45 (UTC 19:45) / 冬令时 (UTC 20:45)
+    # 注意：Cron 表达式可能会有延迟，建议适当提前几分钟
+    # 这里的设置是 UTC 19:45，对应美东夏令时下午 3:45
+    - cron: '45 19 * * 1-5'
+  workflow_dispatch: # 允许手动点击运行测试按钮
+
+jobs:
+  run-strategy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy
+
+      - name: Run Strategy Script
+        env:
+          # 这里引用我们在下一步要设置的 Secrets
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+        run: python daily_signal.py
