@@ -36,3 +36,11 @@ jobs:
         with:
           name: daily-report
           path: result.txt
+                      - name: Download a Build Artifact
+  uses: actions/download-artifact@v3.1.0
+  with:
+    # Artifact name
+    name: # optional
+    # Destination path
+    path: # optional
+          
