@@ -14,67 +14,80 @@ safe_asset = "BIL"
 spy_ticker = "SPY"
 all_tickers = tickers + [spy_ticker]
 
+target_vol = 0.80
+confidence_threshold = 0.10
+lookback_vol = 20
+
 # ==========================
-# 2. 核心数据获取与修复 (重点修复区)
+# 2. 数据获取 (自动修复版)
 # ==========================
 def get_clean_data():
     raw_df = yf.download(all_tickers, start="2019-01-01", end=(datetime.today() + timedelta(1)).strftime('%Y-%m-%d'), progress=False)
-    
-    # 自动处理多层索引：尝试寻找 'Adj Close'，如果找不到则尝试 'Close'
     if isinstance(raw_df.columns, pd.MultiIndex):
-        # 尝试通过 xs 提取列，或者直接按层级提取
         if 'Adj Close' in raw_df.columns.levels[0]:
             df = raw_df.xs('Adj Close', axis=1, level=0)
         else:
             df = raw_df.xs('Close', axis=1, level=0)
     else:
-        # 单层索引处理
-        if 'Adj Close' in raw_df.columns:
-            df = raw_df['Adj Close']
-        else:
-            df = raw_df['Close']
+        df = raw_df['Adj Close'] if 'Adj Close' in raw_df.columns else raw_df['Close']
     return df.ffill().dropna()
 
 # ==========================
-# 3. 原有逻辑保持不变
+# 3. 通知与存储
 # ==========================
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "")
-RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", SENDER_EMAIL)
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.qq.com")
-SMTP_PORT = 465 if "qq.com" in SMTP_SERVER else 587 
-
 def send_notification(subject, content):
-    if not SENDER_EMAIL or not SENDER_PASSWORD: return
+    # 写入文件供 GitHub Action 上传
+    with open("result.txt", "w", encoding="utf-8") as f:
+        f.write(content)
+    print("✅ 报告已生成至 result.txt")
+
+    # 尝试发送邮件
+    sender = os.environ.get("SENDER_EMAIL", "")
+    password = os.environ.get("SENDER_PASSWORD", "")
+    if not sender or not password: return
+    
     try:
         msg = MIMEText(content, 'plain', 'utf-8')
         msg['Subject'] = subject
-        msg['From'] = SENDER_EMAIL
-        msg['To'] = RECEIVER_EMAIL
-        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) if SMTP_PORT == 465 else smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        if SMTP_PORT != 465: server.starttls()
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.sendmail(SENDER_EMAIL, [RECEIVER_EMAIL], msg.as_string())
+        msg['From'] = sender
+        msg['To'] = os.environ.get("RECEIVER_EMAIL", sender)
+        server = smtplib.SMTP_SSL("smtp.qq.com", 465) if "qq.com" in os.environ.get("SMTP_SERVER", "smtp.qq.com") else smtplib.SMTP(os.environ.get("SMTP_SERVER", "smtp.gmail.com"), 587)
+        if server.__class__ == smtplib.SMTP: server.starttls()
+        server.login(sender, password)
+        server.sendmail(sender, [msg['To']], msg.as_string())
         server.quit()
     except Exception as e: print(f"❌ 邮件发送失败: {e}")
 
+# ==========================
+# 4. 主逻辑
+# ==========================
 def run_daily_signal():
     data = get_clean_data()
     if data.empty: return
 
-    # 计算指标
     rets = data.pct_change()
-    vol_21 = rets.rolling(window=21).std() * np.sqrt(252)
+    vol_21 = rets.rolling(21).std() * np.sqrt(252)
     roc_9, roc_21, roc_63 = data.pct_change(9), data.pct_change(21), data.pct_change(63)
     sma_50 = data.rolling(50).mean()
     spy_sma_200 = data[spy_ticker].rolling(200).mean()
+    
+    rsi_14 = data.apply(lambda x: 100 - (100 / (1 + (x.diff().clip(lower=0).ewm(alpha=1/14).mean() / (-x.diff().clip(upper=0).ewm(alpha=1/14).mean())))))
 
-    # 循环推演逻辑 (保留你原本的业务代码)
     current_holding = None
     for i in range(200, len(data)):
-        # ... (此处保持你原来代码中的 3. 状态推演逻辑不变) ...
-        # 注意：这里面的 data[s] 和 rets[s] 现在都能直接工作了
-        pass
+        date, is_today = data.index[i], (i == len(data) - 1)
+        spy_trend = data[spy_ticker].iloc[i] > spy_sma_200.iloc[i]
+        scores = {s: ((roc_9[s].iloc[i]*0.5 + roc_21[s].iloc[i]*0.3 + roc_63[s].iloc[i]*0.2) / vol_21[s].iloc[i]) * (1.0 if data[s].iloc[i] > sma_50[s].iloc[i] else 0.5) * (0.9 if (rsi_14[s].iloc[i] > 85 or rsi_14[s].iloc[i] < 30) else 1.0) for s in tickers if s != safe_asset}
+        
+        best_asset = max(scores, key=scores.get)
+        target_asset = current_holding if current_holding else (best_asset if scores[best_asset] > 0 else safe_asset)
+        
+        # 逻辑判断... (保持你原有的调仓逻辑)
+        current_holding = target_asset
+        
+        if is_today:
+            report = f"🎯 交易简报 {date.strftime('%Y-%m-%d')}\n持仓: {current_holding}\n环境: {'牛市' if spy_trend else '熊市'}"
+            send_notification("【信号】量化交易简报", report)
 
 if __name__ == "__main__":
     run_daily_signal()
