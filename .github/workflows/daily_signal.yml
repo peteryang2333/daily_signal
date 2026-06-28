@@ -32,15 +32,7 @@ jobs:
 
       - name: Upload result
         uses: actions/upload-artifact@v4
-        if: always() # 无论成功还是失败，都上传结果文件（方便排查）
+        if: always()
         with:
           name: daily-report
           path: result.txt
-                      - name: Download a Build Artifact
-  uses: actions/download-artifact@v3.1.0
-  with:
-    # Artifact name
-    name: # optional
-    # Destination path
-    path: # optional
-          
