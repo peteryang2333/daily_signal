@@ -28,7 +28,13 @@ jobs:
       - name: Run Strategy Script
         env:
           # 这里引用我们在最后一步要设置的 Secrets
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }
+
+        - name: Upload Logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: strategy-result
+          path: output.txt # 假设你的脚本把结果写到了这个文件里
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
