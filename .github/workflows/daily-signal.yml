@@ -1,0 +1,40 @@
+name: Daily Quant Signal
+
+on:
+  schedule:
+    - cron: '45 19 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  run-strategy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ACTIONS_PAT || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy
+
+      - name: Run Strategy Script
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+        run: python daily_signal.py
+
+      - name: Commit results
+        run: |
+          mkdir -p results
+          cp result.txt "results/$(date +'%Y-%m-%d').txt"
+          cp result.txt results/最新.txt
+          git config user.name "Signal Bot"
+          git config user.email "signal-bot@github.com"
+          git add results/
+          git diff --staged --quiet || git commit -m "📊 每日信号 $(date +'%Y-%m-%d')"
+          git push
