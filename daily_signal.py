@@ -2,6 +2,9 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
+import sys
+import time
+import shutil
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
@@ -21,19 +24,61 @@ lookback_vol = 20               # 仓位计算波动率回溯期
 # ==========================
 # 2. 强健的数据获取模块
 # ==========================
-def get_clean_data():
+def _clear_yf_cache():
+    """清理 yfinance 的 SQLite 缓存，规避 'database is locked' 问题"""
+    for pattern in [
+        os.path.expanduser("~/.cache/py-yfinance"),
+        os.path.join(os.environ.get("XDG_CACHE_HOME", ""), "py-yfinance"),
+    ]:
+        if pattern and os.path.isdir(pattern):
+            try:
+                shutil.rmtree(pattern)
+                print(f"🧹 已清理 yfinance 缓存: {pattern}")
+            except OSError:
+                pass
+
+
+def get_clean_data(max_retries=3):
     # 获取比200天更多的数据以满足长期均线和历史模拟
-    raw_df = yf.download(all_tickers, start="2019-01-01", end=(datetime.today() + timedelta(1)).strftime('%Y-%m-%d'), progress=False)
-    
-    if isinstance(raw_df.columns, pd.MultiIndex):
-        if 'Adj Close' in raw_df.columns.levels[0]:
-            df = raw_df.xs('Adj Close', axis=1, level=0)
-        else:
-            df = raw_df.xs('Close', axis=1, level=0)
-    else:
-        df = raw_df['Adj Close'] if 'Adj Close' in raw_df.columns else raw_df['Close']
-        
-    return df.ffill().dropna()
+    # threads=False 规避 yfinance 多线程共享 SQLite 缓存导致的 'database is locked'
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            raw_df = yf.download(
+                all_tickers,
+                start="2019-01-01",
+                end=(datetime.today() + timedelta(1)).strftime('%Y-%m-%d'),
+                progress=False,
+                threads=False,
+            )
+
+            if isinstance(raw_df.columns, pd.MultiIndex):
+                if 'Adj Close' in raw_df.columns.levels[0]:
+                    df = raw_df.xs('Adj Close', axis=1, level=0)
+                else:
+                    df = raw_df.xs('Close', axis=1, level=0)
+            else:
+                df = raw_df['Adj Close'] if 'Adj Close' in raw_df.columns else raw_df['Close']
+
+            df = df.ffill().dropna()
+
+            # 校验：所有标的都要有数据，缺列或空表都算失败（避免部分下载失败被吞掉）
+            missing = [t for t in all_tickers if t not in df.columns]
+            if df.empty or missing:
+                raise RuntimeError(f"数据不完整，缺失: {missing or '全部'}")
+
+            return df
+        except Exception as e:
+            last_err = e
+            print(f"⚠️ 第 {attempt}/{max_retries} 次下载失败: {e}")
+            _clear_yf_cache()
+            if attempt < max_retries:
+                wait = 15 * attempt
+                print(f"⏳ {wait}s 后重试…")
+                time.sleep(wait)
+
+    print(f"❌ 重试 {max_retries} 次后仍失败: {last_err}")
+    return pd.DataFrame()
 
 # ==========================
 # 3. 结果保存与邮件通知模块
@@ -86,8 +131,8 @@ def calculate_rsi(series, period=14):
 def run_daily_signal():
     data = get_clean_data()
     if data.empty: 
-        print("❌ 数据获取失败")
-        return
+        print("❌ 数据获取失败（已重试仍不可用），以非零码退出以便 Actions 标记失败")
+        sys.exit(1)
 
     # --- A. 向量化计算所有技术指标 ---
     rets = data.pct_change()
